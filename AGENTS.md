@@ -28,3 +28,9 @@ use the editor.
   own key and store it in Secrets.
 - **Secrets.** Lovable manages them. Do not put secret values in the repo.
 <!-- LOVABLE:END -->
+
+## Project Architecture Rules
+
+- **128×64 OLED Renderer (`src/lib/oled-engine.ts` & `src/lib/accessories.ts`)**: All desk buddy faces and accessories render to a 1-bit 128×64 monochrome framebuffer using only the 4 `Canvas` primitives from the user's ESP32 `face.h` (`fillRoundRect`, `fillTriangle`, `drawLine`, `clear`) so web previews stay 1:1 faithful to the physical 0.96" SSD1306 hardware.
+- **External API Sync (`src/lib/integrations.functions.ts`)**: Codeforces and GitHub public APIs are fetched server-side via TanStack Start `createServerFn` to avoid browser CORS limits and normalize distinct solves, heatmaps, and CodoCoins calculation (`src/lib/scoring.ts`).
+- **Browser Persistence (`src/lib/buddy-store.ts`)**: Onboarding state, names, linked handles, owned/equipped accessories, and spent CodoCoins live in `localStorage` hydrated inside `useEffect` (never read synchronously during SSR render).
