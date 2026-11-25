@@ -1,36 +1,30 @@
-<!-- LOVABLE:BEGIN -->
-> [!IMPORTANT]
-> This project is connected to [Lovable](https://lovable.dev). Avoid rewriting
-> published git history — force pushing, or rebasing/amending/squashing commits
-> that are already pushed — as it rewrites history on Lovable's side and the
-> user will likely lose their project history.
->
-> Commits you push to the connected branch sync back to Lovable and show up in
-> the editor, so keep the branch in a working state.
+# Repository Guidelines
 
-## What Lovable manages
+These instructions apply to AI coding agents working in this repository.
 
-Rules outside this block are the project's own. Change the pieces below in
-Lovable, not by hand. With the [Lovable MCP](https://mcp.lovable.dev)
-connected, `send_message` asks Lovable to do it; otherwise ask the user to
-use the editor.
+## Project overview
 
-- **Database.** Do not add or edit `supabase/migrations/` or `drizzle/`.
-  Ask Lovable to change the schema.
-- **Generated files.** Do not edit a file whose header says it is automatically
-  generated.
-- **AI gateway.** Keep model calls on Lovable's gateway, and keep
-  `LOVABLE_API_KEY` out of browser code.
-- **Connectors.** Lovable provides native connectors. `list_connectors` shows
-  which are enabled; `add_connector` only returns the dashboard link. When a
-  connector is enabled, calls go through the connector gateway and need
-  `LOVABLE_API_KEY`. When Lovable does not provide one, users can bring their
-  own key and store it in Secrets.
-- **Secrets.** Lovable manages them. Do not put secret values in the repo.
-<!-- LOVABLE:END -->
+Codo is a companion website for a programmable ESP32 desk buddy. It connects Codeforces and GitHub activity to a progression system and an accessory shop for a 128×64 monochrome OLED display.
 
-## Project Architecture Rules
+## Project architecture
 
-- **128×64 OLED Renderer (`src/lib/oled-engine.ts` & `src/lib/accessories.ts`)**: All desk buddy faces and accessories render to a 1-bit 128×64 monochrome framebuffer using only the 4 `Canvas` primitives from the user's ESP32 `face.h` (`fillRoundRect`, `fillTriangle`, `drawLine`, `clear`) so web previews stay 1:1 faithful to the physical 0.96" SSD1306 hardware.
-- **External API Sync (`src/lib/integrations.functions.ts`)**: Codeforces and GitHub public APIs are fetched server-side via TanStack Start `createServerFn` to avoid browser CORS limits and normalize distinct solves, heatmaps, and CodoCoins calculation (`src/lib/scoring.ts`).
-- **Browser Persistence (`src/lib/buddy-store.ts`)**: Onboarding state, names, linked handles, owned/equipped accessories, and spent CodoCoins live in `localStorage` hydrated inside `useEffect` (never read synchronously during SSR render).
+- **OLED renderer (`src/lib/oled-engine.ts` and `src/lib/accessories.ts`):** Faces and accessories render to a 1-bit 128×64 framebuffer. Keep the browser preview faithful to the physical 0.96-inch SSD1306 display and the drawing primitives supported by the ESP32 firmware.
+- **External API sync (`src/lib/integrations.functions.ts`):** Codeforces and GitHub public API requests run server-side through TanStack Start server functions. Preserve the existing normalization of distinct solves, activity data, and CodoCoins calculations in `src/lib/scoring.ts`.
+- **Browser persistence (`src/lib/buddy-store.ts`):** Onboarding state, names, linked handles, owned/equipped accessories, and spent CodoCoins are stored in `localStorage`. Access browser storage only on the client (for example, after mount); do not read it synchronously during server-side rendering.
+
+## Development workflow
+
+- Install dependencies with `npm install`.
+- Start the development server with `npm run dev`.
+- Create a production build with `npm run build`.
+- Run the test suite with `npm test`.
+- Run linting with `npm run lint`.
+
+## Change guidelines
+
+- Preserve the existing TanStack Start routing, server/client boundaries, and deployment configuration unless the task explicitly requires changing them.
+- Keep secrets and private credentials out of source control and browser bundles. Use the deployment environment's secret-management facilities for server-side credentials.
+- Do not commit generated build output, dependency directories, or local environment files.
+- When changing scoring, progression, or accessory pricing, check the related UI and tests so the displayed values remain consistent.
+- When changing OLED artwork, verify that it fits within the 128×64 monochrome display and remains compatible with the companion firmware.
+- Prefer focused changes that preserve existing behavior. Run the relevant checks before considering a change complete.
