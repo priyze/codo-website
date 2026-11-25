@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { calculateBuddyMetrics, type BuddyMetrics, type DistinctSolve } from "./scoring";
+import { calculateBuddyMetrics, type BuddyMetrics, type DistinctSolve, type SyncBaseline } from "./scoring";
 
 export interface HeatmapDay {
   date: string; // YYYY-MM-DD
@@ -62,6 +62,7 @@ export interface GithubStats {
 
 export interface SyncedProfileData {
   syncedAt: string;
+  baseline: SyncBaseline;
   codeforces: CodeforcesStats | null;
   github: GithubStats | null;
   metrics: BuddyMetrics;
@@ -246,11 +247,12 @@ async function fetchCodeforces(handle: string, nowMs: number): Promise<{
 async function fetchGithub(username: string, nowMs: number): Promise<{
   stats: GithubStats;
   activeDates: Set<string>;
+  pushTimestampsSec: number[];
 }> {
   const clean = username.trim();
   const encoded = encodeURIComponent(clean);
   const headers = {
-    "User-Agent": "CodoDeskBuddy/1.0",
+    "User-Agent": "Codogotchi/1.0",
     Accept: "application/vnd.github+json",
   };
   const emptyStats: GithubStats = {
@@ -275,7 +277,7 @@ async function fetchGithub(username: string, nowMs: number): Promise<{
       fetch(`https://api.github.com/users/${encoded}/repos?per_page=100&sort=updated`, { headers }),
       fetch(`https://api.github.com/users/${encoded}/events/public?per_page=100`, { headers }),
       fetch(`https://github.com/users/${encoded}/contributions`, {
-        headers: { "User-Agent": "CodoDeskBuddy/1.0", Accept: "text/html" },
+        headers: { "User-Agent": "Codogotchi/1.0", Accept: "text/html" },
       }).catch(() => null),
     ]);
 
@@ -286,6 +288,7 @@ async function fetchGithub(username: string, nowMs: number): Promise<{
           error: userRes.status === 404 ? "GitHub username not found." : "GitHub rate limit reached; try again shortly.",
         },
         activeDates: new Set(),
+        pushTimestampsSec: [],
       };
     }
 
@@ -333,10 +336,13 @@ async function fetchGithub(username: string, nowMs: number): Promise<{
     let eventPushes = 0;
     const eventDateCounts = new Map<string, number>();
     const activeDates = new Set<string>();
+    const pushTimestampsSec: number[] = [];
 
     for (const ev of events) {
       if (ev.type !== "PushEvent") continue;
       eventPushes += 1;
+      const ts = Math.floor(Date.parse(ev.created_at) / 1000);
+      if (Number.isFinite(ts)) pushTimestampsSec.push(ts);
       const d = ev.created_at.slice(0, 10);
       eventDateCounts.set(d, (eventDateCounts.get(d) ?? 0) + 1);
       activeDates.add(d);
@@ -389,24 +395,34 @@ async function fetchGithub(username: string, nowMs: number): Promise<{
         error: null,
       },
       activeDates,
+      pushTimestampsSec,
     };
   } catch {
     return {
       stats: { ...emptyStats, error: "Could not reach GitHub right now. Try syncing again shortly." },
       activeDates: new Set(),
+      pushTimestampsSec: [],
     };
   }
 }
 
+const baselineSchema = z.object({
+  startedAtSec: z.number().int().nonnegative(),
+  initialSolvedIds: z.array(z.string()).max(5000),
+  initialGithubPushes: z.number().int().nonnegative(),
+});
+
 const syncInputSchema = z.object({
   codeforcesHandle: z.string().trim().max(64),
   githubHandle: z.string().trim().max(64),
+  baseline: baselineSchema.nullable().optional(),
 });
 
 export const syncExternalProfile = createServerFn({ method: "POST" })
   .inputValidator((input) => syncInputSchema.parse(input))
   .handler(async ({ data }): Promise<SyncedProfileData> => {
     const nowMs = Date.now();
+    const nowSec = Math.floor(nowMs / 1000);
     const [cfResult, ghResult] = await Promise.all([
       data.codeforcesHandle ? fetchCodeforces(data.codeforcesHandle, nowMs) : Promise.resolve(null),
       data.githubHandle ? fetchGithub(data.githubHandle, nowMs) : Promise.resolve(null),
@@ -423,16 +439,35 @@ export const syncExternalProfile = createServerFn({ method: "POST" })
       if (d >= cutoffStr) combinedActive.add(d);
     }
 
+    const distinctSolves = cfResult?.distinctSolves ?? [];
+    const totalGithubPushes = ghResult?.stats.totalPushes ?? 0;
+
+    // First-time link establishes a baseline snapshot so Codogotchi always starts at Level 0 & 0 coins.
+    const baseline: SyncBaseline = data.baseline ?? {
+      startedAtSec: nowSec,
+      initialSolvedIds: distinctSolves.map((s) => s.id),
+      initialGithubPushes: totalGithubPushes,
+    };
+
+    const eventPushesAfterStart = (ghResult?.pushTimestampsSec ?? []).filter(
+      (ts) => ts >= baseline.startedAtSec,
+    ).length;
+    const deltaPushes = Math.max(0, totalGithubPushes - baseline.initialGithubPushes);
+    const newGithubPushesSinceStart = data.baseline ? Math.max(eventPushesAfterStart, deltaPushes) : 0;
+
     const metrics = calculateBuddyMetrics({
-      distinctSolves: cfResult?.distinctSolves ?? [],
-      totalGithubPushes: ghResult?.stats.totalPushes ?? 0,
+      distinctSolves,
+      totalGithubPushes,
       todayGithubPushes: ghResult?.stats.todayPushes ?? 0,
+      newGithubPushesSinceStart,
       activeDaysLast14: combinedActive.size,
+      baseline,
       nowMs,
     });
 
     return {
       syncedAt: new Date(nowMs).toISOString(),
+      baseline,
       codeforces: cfResult?.stats ?? null,
       github: ghResult?.stats ?? null,
       metrics,

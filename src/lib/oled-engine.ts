@@ -3,14 +3,18 @@ export const OLED_HEIGHT = 64;
 
 export interface OledCanvas {
   clear(): void;
+  drawPixel(x: number, y: number, on: boolean): void;
+  drawFastHLine(x: number, y: number, w: number, on: boolean): void;
+  drawFastVLine(x: number, y: number, h: number, on: boolean): void;
+  fillRect(x: number, y: number, w: number, h: number, on: boolean): void;
+  fillCircle(x0: number, y0: number, r: number, on: boolean): void;
   fillRoundRect(x: number, y: number, w: number, h: number, r: number, on: boolean): void;
   fillTriangle(x0: number, y0: number, x1: number, y1: number, x2: number, y2: number, on: boolean): void;
   drawLine(x0: number, y0: number, x1: number, y1: number, on: boolean): void;
 }
 
 export type MoodLevel = 0 | 1 | 2 | 3; // 0=Sad, 1=Neutral, 2=Happy, 3=Ecstatic
-export type ReactionType = "none" | "pet" | "celebrate";
-export type FaceExpr = "neutral" | "slightly_happy" | "happy" | "sad" | "sleepy" | "petted" | "celebrate";
+export type ReactionType = "none" | "pet" | "celebrate" | "poke";
 
 export interface FaceFrame {
   cx: number;
@@ -25,21 +29,20 @@ export interface FaceFrame {
   mouthX: number;
   mouthY: number;
   openness: number;
-  expression: FaceExpr;
+  happyEyes: boolean;
+  sleeping: boolean;
 }
 
-interface Pose {
-  w: number;
-  h: number;
-  r: number;
-  gap: number;
-  tired: number;
-  happy: number;
-  bob: number;
-  bobHz: number;
-  gaze: number;
-  gazeBias: number;
-  blinkEvery: number;
+// Face model ported directly from types.h / sketch.ino
+interface Face {
+  eyeOpen: number;
+  droop: number;
+  smile: number;
+  mouth: number;
+  lookX: number;
+  lookY: number;
+  blush: number;
+  happyEyes: number;
 }
 
 // Pixel-exact 128x64 monochrome framebuffer emulating Adafruit_SSD1306 + Adafruit_GFX primitives
@@ -50,7 +53,7 @@ export class PixelBufferCanvas implements OledCanvas {
     this.pixels.fill(0);
   }
 
-  setPixel(x: number, y: number, on: boolean): void {
+  drawPixel(x: number, y: number, on: boolean): void {
     const ix = Math.trunc(x);
     const iy = Math.trunc(y);
     if (ix < 0 || ix >= OLED_WIDTH || iy < 0 || iy >= OLED_HEIGHT) return;
@@ -68,7 +71,7 @@ export class PixelBufferCanvas implements OledCanvas {
     const sy = iy0 < iy1 ? 1 : -1;
     let err = dx - dy;
     while (true) {
-      this.setPixel(ix0, iy0, on);
+      this.drawPixel(ix0, iy0, on);
       if (ix0 === ix1 && iy0 === iy1) break;
       const e2 = 2 * err;
       if (e2 > -dy) {
@@ -82,16 +85,20 @@ export class PixelBufferCanvas implements OledCanvas {
     }
   }
 
-  private drawVLine(x: number, y: number, h: number, on: boolean): void {
-    for (let dy = 0; dy < h; dy++) this.setPixel(x, y + dy, on);
+  drawFastVLine(x: number, y: number, h: number, on: boolean): void {
+    const ih = Math.trunc(h);
+    for (let dy = 0; dy < ih; dy++) this.drawPixel(x, y + dy, on);
   }
 
-  private drawHLine(x: number, y: number, w: number, on: boolean): void {
-    for (let dx = 0; dx < w; dx++) this.setPixel(x + dx, y, on);
+  drawFastHLine(x: number, y: number, w: number, on: boolean): void {
+    const iw = Math.trunc(w);
+    for (let dx = 0; dx < iw; dx++) this.drawPixel(x + dx, y, on);
   }
 
-  private fillRect(x: number, y: number, w: number, h: number, on: boolean): void {
-    for (let dx = 0; dx < w; dx++) this.drawVLine(x + dx, y, h, on);
+  fillRect(x: number, y: number, w: number, h: number, on: boolean): void {
+    const iw = Math.trunc(w);
+    const ih = Math.trunc(h);
+    for (let dx = 0; dx < iw; dx++) this.drawFastVLine(x + dx, y, ih, on);
   }
 
   private fillCircleHelper(x0: number, y0: number, r: number, corners: number, delta: number, on: boolean): void {
@@ -113,16 +120,25 @@ export class PixelBufferCanvas implements OledCanvas {
       ddFx += 2;
       f += ddFx;
       if (x < y + 1) {
-        if (corners & 1) this.drawVLine(x0 + x, y0 - y, 2 * y + d, on);
-        if (corners & 2) this.drawVLine(x0 - x, y0 - y, 2 * y + d, on);
+        if (corners & 1) this.drawFastVLine(x0 + x, y0 - y, 2 * y + d, on);
+        if (corners & 2) this.drawFastVLine(x0 - x, y0 - y, 2 * y + d, on);
       }
       if (y !== py) {
-        if (corners & 1) this.drawVLine(x0 + py, y0 - px, 2 * px + d, on);
-        if (corners & 2) this.drawVLine(x0 - py, y0 - px, 2 * px + d, on);
+        if (corners & 1) this.drawFastVLine(x0 + py, y0 - px, 2 * px + d, on);
+        if (corners & 2) this.drawFastVLine(x0 - py, y0 - px, 2 * px + d, on);
         py = y;
       }
       px = x;
     }
+  }
+
+  fillCircle(x0: number, y0: number, r: number, on: boolean): void {
+    const ix0 = Math.trunc(x0);
+    const iy0 = Math.trunc(y0);
+    const ir = Math.trunc(r);
+    if (ir < 0) return;
+    this.drawFastVLine(ix0, iy0 - ir, 2 * ir + 1, on);
+    this.fillCircleHelper(ix0, iy0, ir, 3, 0, on);
   }
 
   fillRoundRect(x: number, y: number, w: number, h: number, r: number, on: boolean): void {
@@ -150,7 +166,7 @@ export class PixelBufferCanvas implements OledCanvas {
     if (ay === cy) {
       const minX = Math.min(ax, bx, cx);
       const maxX = Math.max(ax, bx, cx);
-      this.drawHLine(minX, ay, maxX - minX + 1, on);
+      this.drawFastHLine(minX, ay, maxX - minX + 1, on);
       return;
     }
     const dx01 = bx - ax, dy01 = by - ay;
@@ -164,7 +180,7 @@ export class PixelBufferCanvas implements OledCanvas {
       sa += dx01;
       sb += dx02;
       const left = Math.min(a, b);
-      this.drawHLine(left, y, Math.abs(b - a) + 1, on);
+      this.drawFastHLine(left, y, Math.abs(b - a) + 1, on);
     }
     sa = dx12 * (last + 1 - by);
     sb = dx02 * (last + 1 - ay);
@@ -174,63 +190,37 @@ export class PixelBufferCanvas implements OledCanvas {
       sa += dx12;
       sb += dx02;
       const left = Math.min(a, b);
-      this.drawHLine(left, y, Math.abs(b - a) + 1, on);
+      this.drawFastHLine(left, y, Math.abs(b - a) + 1, on);
     }
   }
 }
 
-// Constants directly ported from face.h
-const FACE_CFG = {
-  centerX: 64,
-  centerY: 30,
-  morphSpeed: 8.0,
-  blinkSeconds: 0.18,
-  sleepHealth: 15,
-  droopBelow: 60,
-  petMs: 2200,
-  celebrateMs: 2800,
-  lookPxX: 12.0,
-  lookPxY: 6.0,
-};
+const MOOD_SMILE: readonly [number, number, number, number] = [-0.7, 0.0, 0.6, 1.0];
+const MOOD_MOUTH: readonly [number, number, number, number] = [0.0, 0.0, 0.0, 0.8];
+const SPARKLE_X = [8, 118, 22, 104, 60, 70] as const;
+const SPARKLE_Y = [10, 12, 56, 54, 4, 60] as const;
 
-function presetFor(e: FaceExpr): Pose {
-  switch (e) {
-    case "slightly_happy":
-      return { w: 32, h: 29, r: 13, gap: 16, tired: 0, happy: 0.25, bob: 0.4, bobHz: 0.4, gaze: 1, gazeBias: 0, blinkEvery: 4 };
-    case "happy":
-      return { w: 38, h: 38, r: 17, gap: 12, tired: 0, happy: 1, bob: 2, bobHz: 1.2, gaze: 1, gazeBias: -0.1, blinkEvery: 3 };
-    case "sad":
-      return { w: 30, h: 30, r: 11, gap: 18, tired: 0.65, happy: 0, bob: 0, bobHz: 0, gaze: 0.35, gazeBias: 0.7, blinkEvery: 6 };
-    case "sleepy":
-      return { w: 32, h: 15, r: 8, gap: 16, tired: 0.9, happy: 0, bob: 0.8, bobHz: 0.25, gaze: 0, gazeBias: 0.3, blinkEvery: 7 };
-    case "petted":
-      return { w: 35, h: 28, r: 13, gap: 14, tired: 0, happy: 1, bob: 1, bobHz: 2, gaze: 0, gazeBias: 0, blinkEvery: 99 };
-    case "celebrate":
-      return { w: 35, h: 36, r: 14, gap: 12, tired: 0, happy: 0.55, bob: 4, bobHz: 2.5, gaze: 0, gazeBias: -0.3, blinkEvery: 99 };
-    default:
-      return { w: 32, h: 34, r: 12, gap: 16, tired: 0, happy: 0, bob: 0, bobHz: 0, gaze: 1, gazeBias: 0, blinkEvery: 4 };
-  }
-}
-
+// Ported 1:1 from Codogotchi sketch.ino (face model, smoothing, blink, reactions, and drawing)
 export class OledFaceEngine {
-  private cur: Pose = { w: 32, h: 34, r: 9, gap: 16, tired: 0, happy: 0, bob: 0, bobHz: 0, gaze: 1, gazeBias: 0, blinkEvery: 4 };
+  private cur: Face = { eyeOpen: 0.8, droop: 0.4, smile: 0, mouth: 0, lookX: 0, lookY: 0, blush: 0, happyEyes: 0 };
+  private tgt: Face = { ...this.cur };
   private mood: MoodLevel = 1;
-  private health = 75;
+  private health = 60;
+  private sleeping = false;
   private reaction: ReactionType = "none";
-  private reactEnd = 0;
+  private rxStart = 0;
+  private rxDur = 0;
+  private extraBounce = 0;
   private lastMs = 0;
+  private nowMs = 0;
   private rng = 0x9e3779b9;
   private started = false;
-  private clock = 0;
-  private blinkPhase = -1;
-  private blinkTimer = 2;
-  private gazeTimer = 1;
-  private gx = 0;
-  private gy = 0;
-  private gcx = 0;
-  private gcy = 0;
-  private bobPhase = 0;
-  private bobPx = 0;
+  private gazeX = 0;
+  private gazeY = 0;
+  private nextGaze = 0;
+  private nextBlink = 2500;
+  private blinkStart = 0;
+  private blinking = false;
 
   constructor(seed = 0x9e3779b9) {
     this.rng = seed >>> 0 || 1;
@@ -244,21 +234,16 @@ export class OledFaceEngine {
     this.health = Math.max(0, Math.min(100, Math.round(h)));
   }
 
+  setSleeping(s: boolean): void {
+    this.sleeping = s;
+  }
+
   react(r: ReactionType, nowMs: number): void {
     if (r === "none") return;
     if (this.reaction === "celebrate" && r === "pet") return;
     this.reaction = r;
-    this.reactEnd = nowMs + (r === "pet" ? FACE_CFG.petMs : FACE_CFG.celebrateMs);
-  }
-
-  expression(): FaceExpr {
-    if (this.reaction === "pet") return "petted";
-    if (this.reaction === "celebrate") return "celebrate";
-    if (this.health <= FACE_CFG.sleepHealth) return "sleepy";
-    if (this.mood === 3) return "happy";
-    if (this.mood === 2) return "slightly_happy";
-    if (this.mood === 0) return "sad";
-    return "neutral";
+    this.rxStart = nowMs;
+    this.rxDur = r === "celebrate" ? 2800 : r === "poke" ? 450 : 2100;
   }
 
   update(nowMs: number, freezeMotion = false): void {
@@ -267,121 +252,266 @@ export class OledFaceEngine {
       dt = Math.min(0.1, Math.max(0, (nowMs - this.lastMs) * 0.001));
     }
     this.lastMs = nowMs;
-    if (this.reaction !== "none" && nowMs >= this.reactEnd) {
-      this.reaction = "none";
+    this.nowMs = nowMs;
+
+    const h = this.health / 100;
+    const m = this.mood;
+
+    this.tgt.eyeOpen = 0.55 + 0.55 * h;
+    this.tgt.droop = 1 - h;
+    this.tgt.smile = MOOD_SMILE[m];
+    this.tgt.mouth = MOOD_MOUTH[m];
+    this.tgt.blush = 0;
+    this.tgt.happyEyes = 0;
+
+    if (!freezeMotion) {
+      if (nowMs > this.nextGaze) {
+        if (Math.floor(this.rnd() * 3) === 0) {
+          this.gazeX = 0;
+          this.gazeY = 0;
+        } else {
+          this.gazeX = this.rnd() * 2 - 1;
+          this.gazeY = this.rnd() - 0.5;
+        }
+        this.nextGaze = nowMs + 1800 + this.rnd() * 4200;
+      }
+      this.tgt.lookX = this.gazeX;
+      this.tgt.lookY = this.gazeY;
+      this.extraBounce = Math.sin(nowMs / 1100) * 0.8;
+    } else {
+      this.tgt.lookX = 0;
+      this.tgt.lookY = 0;
+      this.extraBounce = 0;
     }
-    const target = this.targetPose();
-    if (!this.started) {
-      this.cur = { ...target };
+
+    if (this.sleeping) {
+      this.tgt.eyeOpen = 0.08;
+      this.tgt.droop = 0;
+      this.tgt.smile = 0.2;
+      this.tgt.mouth = 0;
+      this.tgt.lookX = 0;
+      this.tgt.lookY = 0;
+      this.extraBounce = freezeMotion ? 0 : Math.sin(nowMs / 1800) * 1.2;
+    } else {
+      this.applyReaction(nowMs);
+    }
+
+    if (!this.started || freezeMotion) {
+      this.cur = { ...this.tgt };
       this.started = true;
     } else {
-      const k = 1 - Math.exp(-FACE_CFG.morphSpeed * dt);
-      this.cur.w += (target.w - this.cur.w) * k;
-      this.cur.h += (target.h - this.cur.h) * k;
-      this.cur.r += (target.r - this.cur.r) * k;
-      this.cur.gap += (target.gap - this.cur.gap) * k;
-      this.cur.tired += (target.tired - this.cur.tired) * k;
-      this.cur.happy += (target.happy - this.cur.happy) * k;
-      this.cur.bob += (target.bob - this.cur.bob) * k;
-      this.cur.bobHz += (target.bobHz - this.cur.bobHz) * k;
-      this.cur.gaze += (target.gaze - this.cur.gaze) * k;
-      this.cur.gazeBias += (target.gazeBias - this.cur.gazeBias) * k;
-      this.cur.blinkEvery += (target.blinkEvery - this.cur.blinkEvery) * k;
-    }
-    if (!freezeMotion) {
-      this.stepBlink(dt);
-      this.stepGaze(dt);
-      this.stepBob(dt);
-      this.clock += dt;
+      const k = 1 - Math.exp(-dt / 0.1);
+      this.cur.eyeOpen += (this.tgt.eyeOpen - this.cur.eyeOpen) * k;
+      this.cur.droop += (this.tgt.droop - this.cur.droop) * k;
+      this.cur.smile += (this.tgt.smile - this.cur.smile) * k;
+      this.cur.mouth += (this.tgt.mouth - this.cur.mouth) * k;
+      this.cur.lookX += (this.tgt.lookX - this.cur.lookX) * k;
+      this.cur.lookY += (this.tgt.lookY - this.cur.lookY) * k;
+      this.cur.blush += (this.tgt.blush - this.cur.blush) * k;
+      this.cur.happyEyes += (this.tgt.happyEyes - this.cur.happyEyes) * k;
     }
   }
 
-  render(c: OledCanvas): FaceFrame {
+  private applyReaction(nowMs: number): void {
+    if (this.reaction === "none") return;
+    const elapsed = nowMs - this.rxStart;
+    if (elapsed > this.rxDur) {
+      this.reaction = "none";
+      return;
+    }
+    const s = elapsed / 1000;
+    switch (this.reaction) {
+      case "celebrate":
+        this.tgt.happyEyes = 1;
+        this.tgt.smile = 1;
+        this.tgt.mouth = 1;
+        this.tgt.blush = 1;
+        this.tgt.droop = 0;
+        this.extraBounce = -Math.abs(Math.sin(s * Math.PI * 3)) * 7;
+        break;
+      case "poke":
+        this.tgt.eyeOpen = 1.25;
+        this.tgt.droop = 0;
+        this.tgt.smile = 0;
+        this.tgt.mouth = 0.6;
+        this.tgt.lookX = 0;
+        this.tgt.lookY = 0;
+        this.extraBounce = 1.5;
+        break;
+      case "pet":
+        this.tgt.happyEyes = 1;
+        this.tgt.blush = 1;
+        this.tgt.smile = Math.max(this.tgt.smile, 0.7);
+        this.tgt.lookX = 0;
+        this.tgt.lookY = 0;
+        this.extraBounce += Math.sin(s * 9) * 0.8;
+        break;
+    }
+  }
+
+  private blinkAmount(nowMs: number, freezeMotion: boolean): number {
+    if (this.sleeping || freezeMotion) return 0;
+    if (!this.blinking && nowMs >= this.nextBlink) {
+      this.blinking = true;
+      this.blinkStart = nowMs;
+    }
+    if (!this.blinking) return 0;
+    const p = (nowMs - this.blinkStart) / 160;
+    if (p >= 1) {
+      this.blinking = false;
+      this.nextBlink = nowMs + 2200 + this.rnd() * 4300;
+      return 0;
+    }
+    return p < 0.5 ? p * 2 : (1 - p) * 2;
+  }
+
+  render(c: OledCanvas, freezeMotion = false): FaceFrame {
     c.clear();
-    const open = this.openness();
-    const w = Math.floor(this.cur.w + 0.5);
-    const h = Math.max(2, Math.floor(this.cur.h * open + 0.5));
-    const gap = Math.floor(this.cur.gap + 0.5);
-    let r = Math.floor(this.cur.r + 0.5);
-    if (r > Math.floor(h / 2)) r = Math.floor(h / 2);
-    if (r > Math.floor(w / 2)) r = Math.floor(w / 2);
+    const blink = this.blinkAmount(this.nowMs, freezeMotion);
+    const ew = 26;
+    const baseH = 28;
+    const oh = Math.max(2, baseH * this.cur.eyeOpen * (1 - blink));
+    const lx = Math.trunc(this.cur.lookX * 4);
+    const yc = 26 + Math.trunc(this.cur.lookY * 3 + this.extraBounce);
 
-    const cx = FACE_CFG.centerX + Math.floor(this.gcx * FACE_CFG.lookPxX * 0.7 + 0.5);
-    const cy = FACE_CFG.centerY + Math.floor(this.gcy * FACE_CFG.lookPxY + 0.5) + Math.floor(this.bobPx + 0.5);
-    const leftEyeX = cx - Math.floor(gap / 2) - w;
-    const rightEyeX = cx + Math.floor(gap / 2);
-    const eyeY = cy - Math.floor(h / 2);
+    this.drawEye(c, 38, true, this.cur, blink, ew, oh, lx, yc);
+    this.drawEye(c, 90, false, this.cur, blink, ew, oh, lx, yc);
+    this.drawMouth(c, this.cur);
+    this.drawBlush(c, this.cur.blush);
 
-    for (let i = 0; i < 2; i++) {
-      const x = i === 0 ? leftEyeX : rightEyeX;
-      c.fillRoundRect(x, eyeY, w, h, r, true);
-      if (this.cur.tired > 0.02) {
-        const cut = eyeY + Math.trunc(h * 0.35 * this.cur.tired);
-        if (i === 0) c.fillTriangle(x - 1, eyeY - 1, x + w + 1, eyeY - 1, x - 1, cut, false);
-        else c.fillTriangle(x - 1, eyeY - 1, x + w + 1, eyeY - 1, x + w + 1, cut, false);
+    if (!this.sleeping && this.reaction === "celebrate") {
+      this.drawSparkles(c, this.nowMs);
+    }
+    if (!this.sleeping && this.reaction === "pet") {
+      for (let k = 0; k < 3; k++) {
+        const ph = ((this.nowMs / 1000) * 0.8 + k * 0.33) % 1;
+        this.drawHeart(c, 104 + k * 8, 40 - Math.trunc(ph * 34));
       }
-      if (this.cur.happy > 0.02) {
-        const off = Math.trunc(h * 0.25 * this.cur.happy);
-        c.fillRoundRect(x - 1, eyeY + h - off, w + 2, h + 4, r, false);
+    }
+    if (this.sleeping) {
+      for (let k = 0; k < 3; k++) {
+        const ph = (this.nowMs / 1500 + k * 0.33) % 1;
+        this.drawTinyZ(c, 96 + k * 8, 30 - Math.trunc(ph * 24));
       }
     }
 
-    const mouthX = FACE_CFG.centerX;
-    const mouthY = FACE_CFG.centerY + Math.floor(this.gcy * FACE_CFG.lookPxY + 0.5) + Math.floor(this.bobPx + 0.5) + 21;
-    this.drawMouth(c, mouthX, mouthY);
+    const leftEyeX = 38 - ew / 2 + lx;
+    const rightEyeX = 90 - ew / 2 + lx;
+    const h = Math.trunc(oh);
+    const eyeY = yc - Math.trunc(oh / 2);
 
-    if (this.reaction === "none" && this.health <= FACE_CFG.sleepHealth) {
-      this.drawZ(c);
-    }
-
-    return { cx, cy, w, h, gap, r, leftEyeX, rightEyeX, eyeY, mouthX, mouthY, openness: open, expression: this.expression() };
+    return {
+      cx: 64 + lx,
+      cy: yc,
+      w: ew,
+      h,
+      gap: rightEyeX - (leftEyeX + ew),
+      r: 8,
+      leftEyeX,
+      rightEyeX,
+      eyeY,
+      mouthX: 64,
+      mouthY: 50,
+      openness: Math.max(0.08, Math.min(1, (1 - blink) * this.cur.eyeOpen)),
+      happyEyes: this.cur.happyEyes > 0.5,
+      sleeping: this.sleeping,
+    };
   }
 
-  private drawMouth(c: OledCanvas, cx: number, cy: number): void {
-    switch (this.expression()) {
-      case "neutral":
-        c.drawLine(cx - 5, cy, cx + 5, cy, true);
-        break;
-      case "slightly_happy":
-        c.drawLine(cx - 5, cy, cx - 2, cy + 2, true);
-        c.drawLine(cx - 2, cy + 2, cx + 2, cy + 2, true);
-        c.drawLine(cx + 2, cy + 2, cx + 5, cy, true);
-        break;
-      case "happy":
-      case "petted":
-        c.drawLine(cx - 10, cy - 2, cx - 6, cy + 3, true);
-        c.drawLine(cx - 6, cy + 3, cx, cy + 6, true);
-        c.drawLine(cx, cy + 6, cx + 6, cy + 3, true);
-        c.drawLine(cx + 6, cy + 3, cx + 10, cy - 2, true);
-        break;
-      case "sad":
-        c.drawLine(cx - 7, cy + 2, cx - 3, cy - 1, true);
-        c.drawLine(cx - 3, cy - 1, cx + 3, cy - 1, true);
-        c.drawLine(cx + 3, cy - 1, cx + 7, cy + 2, true);
-        break;
-      case "sleepy":
-        c.drawLine(cx - 4, cy, cx + 4, cy, true);
-        break;
-      case "celebrate": {
-        const pulse = (Math.sin(this.clock * 10) + 1) * 0.5;
-        const mouthH = 3 + Math.trunc(pulse * 7);
-        const mouthW = 8 + Math.trunc(pulse * 3);
-        c.fillRoundRect(cx - Math.floor(mouthW / 2), cy - Math.floor(mouthH / 2), mouthW, mouthH, 3, true);
-        break;
+  private drawEye(
+    c: OledCanvas,
+    cx: number,
+    leftEye: boolean,
+    f: Face,
+    _blink: number,
+    ew: number,
+    oh: number,
+    lx: number,
+    yc: number,
+  ): void {
+    if (f.happyEyes > 0.5) {
+      for (let i = -ew / 2; i <= ew / 2; i++) {
+        const k = i / (ew / 2);
+        const yy = yc + 5 - Math.trunc(9 * (1 - k * k));
+        for (let t = 0; t < 3; t++) c.drawPixel(cx + lx + i, yy + t, true);
+      }
+      return;
+    }
+    const x = cx - ew / 2 + lx;
+    const y = yc - Math.trunc(oh / 2);
+    c.fillRoundRect(x, y, ew, Math.trunc(oh), 8, true);
+    if (f.droop > 0.05) {
+      const d = Math.trunc(f.droop * oh * 0.6);
+      const lid = Math.trunc(f.droop * oh * 0.2);
+      if (lid > 0) c.fillRect(x - 1, y - 1, ew + 2, lid + 1, false);
+      if (leftEye) c.fillTriangle(x - 1, y - 1, x + ew + 1, y - 1, x - 1, y + d, false);
+      else c.fillTriangle(x + ew + 1, y - 1, x - 1, y - 1, x + ew + 1, y + d, false);
+    }
+  }
+
+  private drawMouth(c: OledCanvas, f: Face): void {
+    const cx = 64;
+    const cy = 50;
+    const W = 10 + Math.trunc(6 * Math.abs(f.smile));
+    if (f.mouth > 0.3 && Math.abs(f.smile) < 0.25) {
+      c.fillCircle(cx, cy + 2, 2 + Math.trunc(f.mouth * 3), true);
+      return;
+    }
+    let px = 0;
+    let py = 0;
+    for (let i = -W; i <= W; i += 2) {
+      const k = i / W;
+      const y = cy + Math.trunc(f.smile * 8 * (1 - k * k));
+      if (f.smile > 0.2 && f.mouth > 0.2) {
+        const top = cy - 1;
+        const h = Math.trunc((y - top) * f.mouth);
+        if (h > 0) {
+          c.drawFastVLine(cx + i, top, h + 1, true);
+          c.drawFastVLine(cx + i + 1, top, h + 1, true);
+        }
+      }
+      if (i > -W) {
+        c.drawLine(px, py, cx + i, y, true);
+        c.drawLine(px, py + 1, cx + i, y + 1, true);
+      }
+      px = cx + i;
+      py = y;
+    }
+  }
+
+  private drawBlush(c: OledCanvas, a: number): void {
+    if (a < 0.3) return;
+    for (let dx = 0; dx < 8; dx++) {
+      for (let dy = 0; dy < 4; dy++) {
+        if (((dx + dy) & 1) === 0) {
+          c.drawPixel(10 + dx, 42 + dy, true);
+          c.drawPixel(110 + dx, 42 + dy, true);
+        }
       }
     }
   }
 
-  private targetPose(): Pose {
-    const e = this.expression();
-    const t = presetFor(e);
-    if (this.reaction === "none" && e !== "sleepy" && this.health < FACE_CFG.droopBelow) {
-      const d = (FACE_CFG.droopBelow - this.health) / FACE_CFG.droopBelow;
-      t.tired = Math.min(1, t.tired + 0.5 * d);
-      t.h *= 1 - 0.2 * d;
-      t.gaze *= 1 - 0.5 * d;
+  private drawHeart(c: OledCanvas, x: number, y: number): void {
+    c.fillCircle(x - 2, y, 2, true);
+    c.fillCircle(x + 2, y, 2, true);
+    c.fillTriangle(x - 4, y + 1, x + 4, y + 1, x, y + 5, true);
+  }
+
+  private drawSparkles(c: OledCanvas, nowMs: number): void {
+    const s = (nowMs - this.rxStart) / 1000;
+    for (let k = 0; k < 6; k++) {
+      const px = SPARKLE_X[k]!;
+      const py = SPARKLE_Y[k]!;
+      const r = Math.trunc(Math.abs(Math.sin(s * 8 + k * 1.3)) * 3) + 1;
+      c.drawFastHLine(px - r, py, 2 * r + 1, true);
+      c.drawFastVLine(px, py - r, 2 * r + 1, true);
     }
-    return t;
+  }
+
+  private drawTinyZ(c: OledCanvas, x: number, y: number): void {
+    c.drawFastHLine(x, y, 4, true);
+    c.drawLine(x + 3, y, x, y + 4, true);
+    c.drawFastHLine(x, y + 4, 4, true);
   }
 
   private rnd(): number {
@@ -391,61 +521,5 @@ export class OledFaceEngine {
     x ^= (x << 5) >>> 0;
     this.rng = x >>> 0;
     return (this.rng & 0xffffff) / 16777216;
-  }
-
-  private openness(): number {
-    if (this.blinkPhase < 0) return 1;
-    const p = this.blinkPhase;
-    const tri = p < 0.5 ? 1 - 2 * p : 2 * p - 1;
-    return 0.04 + 0.96 * tri;
-  }
-
-  private stepBlink(dt: number): void {
-    if (this.blinkPhase >= 0) {
-      this.blinkPhase += dt / FACE_CFG.blinkSeconds;
-      if (this.blinkPhase >= 1) {
-        this.blinkPhase = -1;
-        this.blinkTimer = this.cur.blinkEvery * (0.5 + this.rnd());
-        if (this.rnd() < 0.15) this.blinkTimer = 0.15;
-      }
-    } else if (this.cur.blinkEvery < 50) {
-      this.blinkTimer -= dt;
-      if (this.blinkTimer <= 0) this.blinkPhase = 0;
-    }
-  }
-
-  private stepGaze(dt: number): void {
-    this.gazeTimer -= dt;
-    if (this.gazeTimer <= 0) {
-      this.gazeTimer = 1.2 + 3 * this.rnd();
-      if (this.rnd() < 0.3) {
-        this.gx = 0;
-        this.gy = 0;
-      } else {
-        this.gx = this.rnd() * 2 - 1;
-        this.gy = (this.rnd() * 2 - 1) * 0.6;
-      }
-    }
-    const k = 1 - Math.exp(-10 * dt);
-    const tx = this.gx * this.cur.gaze;
-    const ty = Math.max(-1, Math.min(1, this.gy * this.cur.gaze + this.cur.gazeBias));
-    this.gcx += (tx - this.gcx) * k;
-    this.gcy += (ty - this.gcy) * k;
-  }
-
-  private stepBob(dt: number): void {
-    this.bobPhase += 6.2831853 * this.cur.bobHz * dt;
-    if (this.bobPhase > 6.2831853) this.bobPhase -= 6.2831853;
-    this.bobPx = this.cur.bob * Math.sin(this.bobPhase);
-  }
-
-  private drawZ(c: OledCanvas): void {
-    const t = (this.clock * 0.5) % 1;
-    const s = 5 + Math.trunc(t * 3);
-    const zx = 98 + Math.trunc(t * 10);
-    const zy = 14 - Math.trunc(t * 10);
-    c.drawLine(zx, zy, zx + s, zy, true);
-    c.drawLine(zx + s, zy, zx, zy + s, true);
-    c.drawLine(zx, zy + s, zx + s, zy + s, true);
   }
 }

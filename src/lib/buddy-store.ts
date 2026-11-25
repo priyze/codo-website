@@ -2,8 +2,10 @@ import { useCallback, useEffect, useState } from "react";
 import { useHydrated } from "@tanstack/react-router";
 import { getAccessoryById } from "./accessories";
 import type { SyncedProfileData } from "./integrations.functions";
+import type { SyncBaseline } from "./scoring";
 
-export const STORAGE_KEY = "codo_desk_buddy_v1";
+export const STORAGE_KEY = "codogotchi_state_v2";
+const LEGACY_STORAGE_KEY = "codo_desk_buddy_v1";
 
 export interface BuddyState {
   onboarded: boolean;
@@ -15,6 +17,7 @@ export interface BuddyState {
   equippedEyesId: string | null;
   equippedMouthId: string | null;
   spentCoins: number;
+  baseline: SyncBaseline | null;
   profileData: SyncedProfileData | null;
 }
 
@@ -28,20 +31,44 @@ const DEFAULT_STATE: BuddyState = {
   equippedEyesId: null,
   equippedMouthId: null,
   spentCoins: 0,
+  baseline: null,
   profileData: null,
 };
 
 function readStorage(): BuddyState {
   if (typeof window === "undefined") return DEFAULT_STATE;
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage.getItem(STORAGE_KEY) ?? window.localStorage.getItem(LEGACY_STORAGE_KEY);
     if (!raw) return DEFAULT_STATE;
     const parsed = JSON.parse(raw) as Partial<BuddyState>;
-    return {
+    const baseline = parsed.baseline ?? parsed.profileData?.baseline ?? null;
+    const migrated: BuddyState = {
       ...DEFAULT_STATE,
       ...parsed,
       ownedIds: Array.isArray(parsed.ownedIds) ? parsed.ownedIds : [],
+      baseline,
     };
+    // Legacy v1 state counted historical solves before baseline tracking existed — reset progression to 0
+    if (!baseline && migrated.profileData) {
+      migrated.spentCoins = 0;
+      migrated.profileData = {
+        ...migrated.profileData,
+        metrics: {
+          ...migrated.profileData.metrics,
+          totalEarnedCoins: 0,
+          coinsFromCf: 0,
+          coinsFromGithub: 0,
+          level: 0,
+          levelProgress: 0,
+          totalXp: 0,
+          newSolvesCount: 0,
+          newGithubPushesCount: 0,
+          celebrateSeq: 0,
+          difficultyGain: 0,
+        },
+      };
+    }
+    return migrated;
   } catch {
     return DEFAULT_STATE;
   }
@@ -102,6 +129,8 @@ export function useBuddyStore() {
           ownedIds: Array.from(new Set([...prev.ownedIds, ...payload.starterIds])),
           equippedEyesId: eyesId,
           equippedMouthId: mouthId,
+          spentCoins: 0,
+          baseline: payload.profileData?.baseline ?? null,
           profileData: payload.profileData,
         };
       });
@@ -117,21 +146,34 @@ export function useBuddyStore() {
       githubHandle: string;
       profileData: SyncedProfileData | null;
     }) => {
-      update((prev) => ({
-        ...prev,
-        userName: payload.userName.trim(),
-        buddyName: payload.buddyName.trim(),
-        codeforcesHandle: payload.codeforcesHandle.trim(),
-        githubHandle: payload.githubHandle.trim(),
-        profileData: payload.profileData,
-      }));
+      update((prev) => {
+        const nextCf = payload.codeforcesHandle.trim();
+        const nextGh = payload.githubHandle.trim();
+        const handlesChanged = nextCf !== prev.codeforcesHandle || nextGh !== prev.githubHandle;
+        return {
+          ...prev,
+          userName: payload.userName.trim(),
+          buddyName: payload.buddyName.trim(),
+          codeforcesHandle: nextCf,
+          githubHandle: nextGh,
+          spentCoins: handlesChanged ? 0 : prev.spentCoins,
+          baseline: handlesChanged
+            ? payload.profileData?.baseline ?? null
+            : prev.baseline ?? payload.profileData?.baseline ?? null,
+          profileData: payload.profileData,
+        };
+      });
     },
     [update],
   );
 
   const setProfileData = useCallback(
     (profileData: SyncedProfileData) => {
-      update((prev) => ({ ...prev, profileData }));
+      update((prev) => ({
+        ...prev,
+        baseline: prev.baseline ?? profileData.baseline,
+        profileData,
+      }));
     },
     [update],
   );
@@ -176,8 +218,8 @@ export function useBuddyStore() {
 
   const earnedCoins = state.profileData?.metrics.totalEarnedCoins ?? 0;
   const coinBalance = Math.max(0, earnedCoins - state.spentCoins);
-  const level = state.profileData?.metrics.level ?? 1;
-  const health = state.profileData?.metrics.health ?? 65;
+  const level = state.profileData?.metrics.level ?? 0;
+  const health = state.profileData?.metrics.health ?? 60;
   const mood = state.profileData?.metrics.mood ?? 1;
 
   return {
